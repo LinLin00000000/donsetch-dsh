@@ -31,7 +31,7 @@ before(() => {
   process.env.FAKE_ALL_LOG = join(artifact, 'all.log')
   process.env.FAKE_RAW_LOG = join(artifact, 'raw.log')
   process.env.FAKE_BOOT_LOG = bootLog
-  process.env.DONSETCH_BIN = FAKE
+  process.env.DONSETCH_BIN = process.platform === 'win32' ? join(HERE, 'fake-mcp-server.cmd') : FAKE
   process.env.DONSETCH_DSH_HOME = homeDir
   process.env.DONSETCH_DSH_AUTOUPDATE = 'off'
   chmodSync(FAKE, 0o755)

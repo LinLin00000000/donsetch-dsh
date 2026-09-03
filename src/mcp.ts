@@ -172,11 +172,17 @@ export class McpClient {
         delete env.NODE_TEST_CONTEXT
         delete env.NODE_V8_COVERAGE
         if (underTestRunner) delete env.NODE_OPTIONS
+        // Windows can only CreateProcess a real executable. A .cmd/.bat
+        // test seam (or a user-supplied wrapper) must route through
+        // cmd.exe; the shipped donsetch.exe never does.
+        const useShell =
+          process.platform === 'win32' && /\.(cmd|bat)$/i.test(this.opts.cmd[0] ?? '')
         proc = spawn(this.opts.cmd[0]!, this.opts.cmd.slice(1), {
           stdio: ['pipe', 'pipe', 'pipe'],
           env,
           cwd: this.opts.cwd,
           windowsHide: true,
+          ...(useShell ? { shell: true } : {}),
         })
       } catch (err) {
         reject(new Error(`failed to spawn donsetch: ${err instanceof Error ? err.message : String(err)}`))
