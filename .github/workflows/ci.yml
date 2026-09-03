@@ -29,6 +29,12 @@ jobs:
           # The live test downloads the pinned release from GitHub
           # Releases and drives the real daemon over MCP.
           DONSETCH_DSH_AUTOUPDATE: off
+      - name: Real-registry contract proof (apply into an actual dsh ToolRuntime)
+        run: |
+          DONSETCH_BIN="$(node -e "import('./dist/binary.js').then(m => process.stdout.write(m.binaryAt(process.argv[1])))" "$(node -e "import('./dist/version.js').then(m => process.stdout.write(m.PINNED_DONSETCH_VERSION))")")"
+          DONSETCH_BIN="$DONSETCH_BIN" node --test --test-concurrency=1 test/real-registry.test.mjs
+        env:
+          DONSETCH_DSH_AUTOUPDATE: off
 
   # The Ubuntu boot smoke waits on upstream discussion #1686 (the npm
   # dsh CLI lacks the linux-x64 pty prebuild and cannot boot). Until

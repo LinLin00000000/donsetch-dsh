@@ -29,7 +29,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { cacheDir, checkForUpdate, downloadBinary, installedVersions, resolveBinary } from './binary.js';
 import { McpClient } from './mcp.js';
-import { callTitle, firstLine, isValidPrefix, publicToolName } from './schemas.js';
+import { callKind, callTitle, firstLine, isValidPrefix, publicToolName, specViolation, toDshSpec } from './schemas.js';
 import { PINNED_DONSETCH_VERSION, PLUGIN_VERSION } from './version.js';
 export const name = 'donsetch';
 export const inject = ['tools'];
@@ -57,15 +57,41 @@ function clampInt(value, min, max, fallback) {
 }
 /** Resolve the config file the real donsetch CLI reads, per OS. */
 export function donsetchConfigPath() {
-    const home = process.env.DONSETCH_DSH_HOME?.trim();
+    const home = donsetchHome();
     if (process.platform === 'win32') {
-        const base = home ?? (process.env.APPDATA?.trim() || join(homedir(), 'AppData', 'Roaming'));
+        const base = process.env.APPDATA?.trim() || join(home, 'AppData', 'Roaming');
         return join(base, 'donsetch', 'config.json');
     }
     if (process.platform === 'darwin') {
-        return join(home ?? homedir(), 'Library', 'Application Support', 'donsetch', 'config.json');
+        return join(home, 'Library', 'Application Support', 'donsetch', 'config.json');
     }
-    return join(home ?? homedir(), '.config', 'donsetch', 'config.json');
+    return join(home, '.config', 'donsetch', 'config.json');
+}
+/**
+ * The file the real CLI writes provider keys into (`donsetch keys
+ * add` -> cache_dir/byok-keys.json). This is the state Dondai
+ * expects to carry over: watch it, and surface its path in status.
+ */
+export function donsetchKeysPath() {
+    const home = donsetchHome();
+    if (process.platform === 'win32') {
+        const base = process.env.LOCALAPPDATA?.trim() || join(home, 'AppData', 'Local');
+        return join(base, 'donsetch', 'byok-keys.json');
+    }
+    if (process.platform === 'darwin') {
+        return join(home, 'Library', 'Caches', 'donsetch', 'byok-keys.json');
+    }
+    return join(home, '.cache', 'donsetch', 'byok-keys.json');
+}
+function donsetchHome() {
+    const override = process.env.DONSETCH_DSH_HOME?.trim();
+    if (override)
+        return override;
+    const forceHome = process.env.HOME?.trim();
+    if (process.platform === 'win32') {
+        return forceHome || process.env.USERPROFILE?.trim() || homedir();
+    }
+    return forceHome || homedir();
 }
 /**
  * Render the canonical tool result (the raw MCP result object) into
@@ -93,16 +119,17 @@ function renderContent(value) {
 }
 export function apply(ctx, rawConfig = {}) {
     let config;
+    const inert = { dispose: async () => { } };
     try {
         config = resolveConfig(rawConfig);
     }
     catch (err) {
         ctx.logger?.error(`donsetch plugin rejecting configuration: ${err instanceof Error ? err.message : String(err)}`);
-        return;
+        return inert;
     }
     if (typeof ctx.tools?.register !== 'function') {
         ctx.logger?.error('donsetch plugin: this DeepSeek Harness build has no ctx.tools registry (missing @deepseek-ai/dsh-tools)');
-        return;
+        return inert;
     }
     const log = (msg) => {
         ctx.logger?.info(`[donsetch] ${msg}`);
@@ -112,6 +139,7 @@ export function apply(ctx, rawConfig = {}) {
     };
     const disposers = [];
     const registeredNames = new Set();
+    const registrationFailures = [];
     let booted = null;
     let bootError = null;
     let status = 'starting';
@@ -141,15 +169,11 @@ export function apply(ctx, rawConfig = {}) {
                 // Disposer already ran; ignore.
             }
         }
-        // A healthy daemon owns troubleshooting; the status tool only
-        // exists while we are starting up or down.
-        if (status === 'ready' || status === 'degraded')
-            return;
         const def = {
             name: publicToolName(config.toolPrefix, 'status') ?? `${config.toolPrefix}_status`,
-            description: 'DonSeTch status and self-diagnostics: binary version, daemon state, last error, config file path, and the output of `donsetch doctor`. Read this when a donsetch_* tool fails or is missing.',
-            parameters: { type: 'object', properties: {} },
-            output: { schema: {}, render: renderContent },
+            description: 'DonSeTch status and self-diagnostics: binary version, daemon state, registered tools, registration failures, provider keys file, config file path, and the output of `donsetch doctor`. Read this when a donsetch_* tool fails or is missing.',
+            parameters: {},
+            output: { schema: {}, render: (_args, value) => renderContent(value) },
             execute: async () => {
                 const lines = [];
                 lines.push(`DonSeTch plugin status: ${status}`);
@@ -160,6 +184,14 @@ export function apply(ctx, rawConfig = {}) {
                     lines.push('state: daemon starting in background; re-check shortly');
                 }
                 lines.push(`config file: ${donsetchConfigPath()}${existsSync(donsetchConfigPath()) ? '' : ' (not written yet)'}`);
+                const keysPath = donsetchKeysPath();
+                lines.push(`provider keys: ${keysPath}${existsSync(keysPath) ? '' : ' (missing: `donsetch keys add` has not been run for this home)'}`);
+                lines.push(`registered tools (${registeredNames.size}): ${[...registeredNames].sort().join(', ') || '(none)'}`);
+                if (registrationFailures.length > 0) {
+                    lines.push(`registration failures (${registrationFailures.length}):`);
+                    for (const failure of registrationFailures)
+                        lines.push(`  - ${failure}`);
+                }
                 lines.push(`binary cache: ${cacheDir()}`);
                 lines.push(`pinned release: v${config.pinnedVersion}`);
                 if (booted) {
@@ -190,20 +222,35 @@ export function apply(ctx, rawConfig = {}) {
     function registerTool(rawName, description, inputSchema) {
         const pub = publicToolName(config.toolPrefix, rawName);
         if (pub === null) {
-            warn(`skipping tool ${JSON.stringify(rawName)}: name does not fit the tool-name contract`);
+            const reason = `skipping tool ${JSON.stringify(rawName)}: name does not fit the tool-name contract`;
+            registrationFailures.push(reason);
+            warn(reason);
             return false;
         }
         if (registeredNames.has(pub)) {
-            warn(`skipping duplicate tool name ${pub}`);
+            const reason = `skipping duplicate tool name ${pub}`;
+            registrationFailures.push(reason);
+            warn(reason);
             return false;
+        }
+        // The harness consumes parameters in its implicit parameter-schema
+        // form (a property map of value schemas), not as a JSON Schema
+        // document. Convert, then prove the conversion so the register call
+        // and every call-time validateArgs can never trip on schema shape.
+        const parameters = toDshSpec(inputSchema);
+        const violation = specViolation(parameters);
+        if (violation !== null) {
+            const reason = `tool ${pub}: converted parameters still violate the spec contract (${violation}); registered with an open json parameter`;
+            Object.keys(parameters).forEach((key) => delete parameters[key]);
+            parameters.input = { type: 'json' };
+            registrationFailures.push(reason);
+            warn(reason);
         }
         const def = {
             name: pub,
             description: description || `${rawName} via DonSeTch`,
-            parameters: inputSchema && typeof inputSchema === 'object' && Object.keys(inputSchema).length > 0
-                ? inputSchema
-                : { type: 'object', properties: {} },
-            output: { schema: {}, render: renderContent },
+            parameters,
+            output: { schema: {}, render: (_args, value) => renderContent(value) },
             execute: async (args, exec) => {
                 const healthy = await ensureDaemon(exec.signal);
                 if (!healthy) {
@@ -221,10 +268,11 @@ export function apply(ctx, rawConfig = {}) {
                 }
                 finally {
                     activeCalls--;
+                    refreshWatchBaseline();
                     void maybeSwapUpdate();
                 }
             },
-            presentCall: (args) => ({ card: 'generic', title: callTitle(pub, args), rawInput: args }),
+            presentCall: (args) => ({ card: 'generic', kind: callKind(pub), title: callTitle(pub, args), rawInput: args }),
             presentResult: (_args, value) => ({
                 card: 'generic',
                 title: resultTitle(pub, value),
@@ -236,7 +284,9 @@ export function apply(ctx, rawConfig = {}) {
             dispose = ctx.tools.register(def);
         }
         catch (err) {
-            warn(`tool ${pub} rejected by the registry: ${err instanceof Error ? err.message : String(err)}`);
+            const reason = `tool ${pub} rejected by the registry: ${err instanceof Error ? err.message : String(err)}`;
+            registrationFailures.push(reason);
+            warn(reason);
             return false;
         }
         disposers.push(dispose);
@@ -285,6 +335,9 @@ export function apply(ctx, rawConfig = {}) {
         status = bin.source === 'path' ? 'degraded' : 'ready';
         bootError = null;
         registerStatusTools();
+        // The daemon may rewrite byok-keys.json during startup (key
+        // rotation/retirement bookkeeping): consume that write.
+        refreshWatchBaseline();
         for (const tool of fresh.tools) {
             registerTool(tool.name, tool.description, tool.inputSchema);
         }
@@ -363,6 +416,37 @@ export function apply(ctx, rawConfig = {}) {
         return `${v.major}.${v.minor}.${v.patch}${pre}`;
     }
     // ── Side effects, owned by the plugin fiber ──
+    const teardown = async () => {
+        if (disposed)
+            return;
+        disposed = true;
+        generation++;
+        for (const dispose of disposers.splice(0)) {
+            try {
+                dispose();
+            }
+            catch {
+                // Already run.
+            }
+        }
+        for (const dispose of statusRegistrations.splice(0)) {
+            try {
+                dispose();
+            }
+            catch {
+                // Already run.
+            }
+        }
+        const client = booted?.client;
+        booted = null;
+        if (client)
+            await client.dispose(1500);
+        if (restartTimer !== null) {
+            clearTimeout(restartTimer);
+            restartTimer = null;
+            armedMtime = null;
+        }
+    };
     ctx.effect(() => {
         registerStatusTools();
         void boot().catch((err) => {
@@ -370,73 +454,84 @@ export function apply(ctx, rawConfig = {}) {
             status = 'failed';
             registerStatusTools();
         });
-        return async () => {
-            disposed = true;
-            generation++;
-            for (const dispose of disposers.splice(0)) {
-                try {
-                    dispose();
-                }
-                catch {
-                    // Already run.
-                }
-            }
-            for (const dispose of statusRegistrations.splice(0)) {
-                try {
-                    dispose();
-                }
-                catch {
-                    // Already run.
-                }
-            }
-            const client = booted?.client;
-            booted = null;
-            if (client)
-                await client.dispose(1500);
+        return () => {
+            void teardown();
         };
     }, 'donsetch-lifecycle');
-    // CLI config from the terminal reaches the live daemon via a
-    // polling file watch on the config the real donsetch CLI writes.
-    // The first listener call can fire on attach when the file has a
-    // stale mtime: only restart when the mtime actually moves.
-    let configWatchActive = false;
+    const watchEntries = [
+        { path: donsetchConfigPath(), lastMtime: null },
+        { path: donsetchKeysPath(), lastMtime: null },
+    ];
     let restartTimer = null;
-    let lastSeenMtime = null;
-    const configPath = donsetchConfigPath();
-    const recordMtime = () => {
+    let armedMtime = null;
+    const recordMtime = (path) => {
         try {
-            return statSync(configPath).mtimeMs;
+            return statSync(path).mtimeMs;
         }
         catch {
             return null;
         }
     };
-    lastSeenMtime = recordMtime();
-    try {
-        watchFile(configPath, { persistent: false, interval: 1200 }, () => {
-            const mtime = recordMtime();
-            if (mtime !== null && mtime === lastSeenMtime)
-                return;
-            lastSeenMtime = mtime;
-            if (restartTimer !== null)
-                return;
-            restartTimer = setTimeout(() => {
-                restartTimer = null;
-                log(`donsetch config changed on disk (${configPath}); restarting daemon`);
-                restartDaemon();
-                void ensureDaemon();
-            }, 800);
-        });
-        configWatchActive = true;
+    const refreshWatchBaseline = () => {
+        for (const entry of watchEntries) {
+            entry.lastMtime = recordMtime(entry.path);
+        }
+        if (restartTimer !== null) {
+            clearTimeout(restartTimer);
+            restartTimer = null;
+            armedMtime = null;
+        }
+    };
+    for (const entry of watchEntries) {
+        entry.lastMtime = recordMtime(entry.path);
     }
-    catch {
-        warn(`could not watch ${configPath}; CLI config changes will apply after the next dsh restart`);
+    for (const entry of watchEntries) {
+        try {
+            watchFile(entry.path, { persistent: false, interval: 1200 }, () => {
+                const mtime = recordMtime(entry.path);
+                if (mtime === null) {
+                    // Missing at this event (including the attach probe):
+                    // nothing real to restart for.
+                    entry.lastMtime = null;
+                    return;
+                }
+                entry.lastMtime = mtime;
+                if (activeCalls > 0 || disposed)
+                    return;
+                if (restartTimer !== null)
+                    return;
+                armedMtime = mtime;
+                restartTimer = setTimeout(() => {
+                    restartTimer = null;
+                    const latest = recordMtime(entry.path);
+                    if (latest !== armedMtime) {
+                        // Written again during the debounce: drop this event; the
+                        // next change fires a fresh callback.
+                        armedMtime = null;
+                        return;
+                    }
+                    armedMtime = null;
+                    if (disposed)
+                        return;
+                    log(`donsetch state changed on disk (${entry.path}); restarting daemon`);
+                    restartDaemon();
+                    void ensureDaemon();
+                }, 800);
+            });
+        }
+        catch {
+            warn(`could not watch ${entry.path}; CLI config changes will apply after the next dsh restart`);
+        }
     }
     ctx.effect(() => {
         return () => {
-            if (configWatchActive) {
-                unwatchFile(configPath);
-                configWatchActive = false;
+            for (const entry of watchEntries) {
+                try {
+                    unwatchFile(entry.path);
+                }
+                catch {
+                    // Never watched.
+                }
             }
             if (restartTimer !== null) {
                 clearTimeout(restartTimer);
@@ -473,4 +568,7 @@ export function apply(ctx, rawConfig = {}) {
         }, 'donsetch-update-check');
     }
     log(`plugin v${PLUGIN_VERSION} loaded; donsetch v${config.pinnedVersion}+ via the ${config.toolPrefix}_* tools`);
+    // Manual teardown seam for embedders and tests; the harness normally
+    // owns disposal through the lifecycle effect above.
+    return { dispose: () => teardown() };
 }

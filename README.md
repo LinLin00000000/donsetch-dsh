@@ -38,6 +38,8 @@ dsh ships a built-in MCP client. Pointing it at `donsetch mcp` works, but this p
 | Config changes from the CLI | restart everything | live daemon restart on config file change |
 | Workbench cards | generic | per-tool call/result summaries |
 | Status + doctor for the agent | none | `donsetch_status` |
+| Harness schema contract | none | parameters comply with the enforced implicit parameter schema |
+| Correctness gate in CI | none | the plugin runs inside a real dsh ToolRuntime on every push |
 
 ## How customization works
 

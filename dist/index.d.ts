@@ -47,4 +47,12 @@ export interface DonsetchConfig {
 }
 /** Resolve the config file the real donsetch CLI reads, per OS. */
 export declare function donsetchConfigPath(): string;
-export declare function apply(ctx: Context, rawConfig?: DonsetchConfig): void;
+/**
+ * The file the real CLI writes provider keys into (`donsetch keys
+ * add` -> cache_dir/byok-keys.json). This is the state Dondai
+ * expects to carry over: watch it, and surface its path in status.
+ */
+export declare function donsetchKeysPath(): string;
+export declare function apply(ctx: Context, rawConfig?: DonsetchConfig): {
+    dispose(): Promise<void>;
+};

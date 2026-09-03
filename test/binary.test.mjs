@@ -30,6 +30,9 @@ const servedVersions = new Set(['3.5.2', '3.5.3', '3.5.4', '3.5.5'])
 let binaryApi
 
 before(async () => {
+  // Test-seam hygiene: DONSETCH_BIN would hijack resolveBinary past
+  // the cache fixtures if the caller exported it on the process.
+  delete process.env.DONSETCH_BIN
   artifact = mkdtempSync(join(tmpdir(), 'donsetch-dsh-bin-'))
   cacheRoot = join(artifact, 'cache')
   const payload = '#!/bin/sh\necho fake-donsetch\n'

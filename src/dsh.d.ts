@@ -38,6 +38,7 @@ declare module '@deepseek-ai/dsh-tools' {
   export interface ToolCallView {
     card: 'generic'
     title: string
+    kind?: 'read' | 'edit' | 'delete' | 'move' | 'search' | 'execute' | 'fetch' | 'other'
     rawInput?: unknown
   }
 
@@ -50,7 +51,7 @@ declare module '@deepseek-ai/dsh-tools' {
   export interface ToolDefinition {
     name: string
     description?: string
-    /** Raw JSON Schema document, exactly as MCP servers deliver it. */
+    /** Implicit parameter schema: a property map of value schemas ({ url: { type: 'string', required: true } }). */
     parameters: JsonSchemaNode
     output: {
       /** `{}` accepts any JSON value; render projects it to content blocks. */

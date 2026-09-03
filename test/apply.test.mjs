@@ -47,6 +47,19 @@ after(() => {
 })
 
 const { apply, donsetchConfigPath } = await import('../dist/index.js')
+const { specViolation } = await import('../dist/schemas.js')
+
+function assertRegistryClean(def, label) {
+  const violations = []
+  const paramsViolation = specViolation(def.parameters ?? {})
+  if (paramsViolation !== null) violations.push(`parameters: ${paramsViolation}`)
+  if (typeof def.name !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(def.name)) {
+    violations.push(`name ${JSON.stringify(def.name)} is not a legal tool name`)
+  }
+  if (violations.length > 0) {
+    throw new Error(`registry would reject ${label}: ${violations.join('; ')}`)
+  }
+}
 
 test('apply: registers tools with prefix, skips invalid names, swaps status tool out when healthy', async () => {
   const harness = makeHarness()
@@ -59,13 +72,22 @@ test('apply: registers tools with prefix, skips invalid names, swaps status tool
   assert.ok(names.includes('ds_crash_tool'))
   assert.ok(!names.includes('ds_has space!!'), 'illegal tool names must be skipped, not registered')
 
-  // The startup status tool must have been disposed once healthy.
-  await harness.waitFor(() => !harness.defs().some((d) => d.name === 'ds_status'), 8000)
+  // The status tool stays registered even when healthy: the agent
+  // must always be able to self-diagnose.
+  await harness.waitFor((h) => h.defs().some((d) => d.name === 'ds_status'), 8000)
+  assert.ok(names.includes('ds_status'))
 
   // Execute the real echo tool through the plugin path.
   const echo = findDef(harness, 'ds_echo_tool')
   const result = await echo.execute({ text: 'native' }, { signal: new AbortController().signal })
   assert.equal(result.content[0].text, 'echo:native')
+
+  // The real registry invokes output.render(args, value): assert the
+  // rendering reads the VALUE slot. A render that reads its first
+  // parameter renders the call args and destroys every tool result:
+  // this is the regression test for exactly that class of bug.
+  const rendered = harness.render('ds_echo_tool', { text: 'native' })
+  assert.equal(rendered[0].text, 'echo:native')
 
   // Error mapping: server isError becomes a thrown Error.
   const fail = findDef(harness, 'ds_fail_tool')
@@ -173,6 +195,9 @@ function makeHarness() {
   const ctx = {
     tools: {
       register(def) {
+        // Mirror the real dsh registry: reject definitions whose
+        // schemas sit outside the enforced subset.
+        assertRegistryClean(def, def.name)
         all.set(def.name, def)
         return () => {
           all.delete(def.name)
@@ -218,6 +243,15 @@ function makeHarness() {
           }
         }, 60)
       })
+    },
+    /** Render the tool result the way the real registry does: render(args, value). */
+    render(name, args) {
+      const searchable = all.get(name)
+      assert.ok(searchable, `tool ${name} must be registered`)
+      const envelope = { content: [{ type: 'text', text: `placeholder-${name}` }] }
+      // Fake daemon echo envelope matching the fake MCP server's shape.
+      const value = { content: [{ type: 'text', text: `echo:${args?.text ?? 'x'}` }] }
+      return searchable.output.render(args, value)
     },
     dispose: async () => {
       for (const d of disposers.splice(0)) await d()
