@@ -98,9 +98,12 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 
 /** Resolve the config file the real donsetch CLI reads, per OS. */
 export function donsetchConfigPath(): string {
+  const override = process.env.DONSETCH_DSH_HOME?.trim()
   const home = donsetchHome()
   if (process.platform === 'win32') {
-    const base = process.env.APPDATA?.trim() || join(home, 'AppData', 'Roaming')
+    const base = override
+      ? join(home, 'AppData', 'Roaming')
+      : process.env.APPDATA?.trim() || join(home, 'AppData', 'Roaming')
     return join(base, 'donsetch', 'config.json')
   }
   if (process.platform === 'darwin') {
@@ -115,9 +118,12 @@ export function donsetchConfigPath(): string {
  * expects to carry over: watch it, and surface its path in status.
  */
 export function donsetchKeysPath(): string {
+  const override = process.env.DONSETCH_DSH_HOME?.trim()
   const home = donsetchHome()
   if (process.platform === 'win32') {
-    const base = process.env.LOCALAPPDATA?.trim() || join(home, 'AppData', 'Local')
+    const base = override
+      ? join(home, 'AppData', 'Local')
+      : process.env.LOCALAPPDATA?.trim() || join(home, 'AppData', 'Local')
     return join(base, 'donsetch', 'byok-keys.json')
   }
   if (process.platform === 'darwin') {

@@ -92,7 +92,7 @@ after(async () => {
 test('downloadBinary: happy path verifies, extracts, chmods, caches', async () => {
   const { downloadBinary, installedVersions, PLATFORM } = binaryApi
   const path = await downloadBinary('3.5.2', { timeoutMs: 15000 })
-  assert.ok(path.endsWith(`/bin/3.5.2/${PLATFORM.key === 'win32-x64' ? 'donsetch.exe' : 'donsetch'}`))
+  assert.equal(path, join(cacheRoot, 'bin', '3.5.2', PLATFORM.key === 'win32-x64' ? 'donsetch.exe' : 'donsetch'))
   assert.ok(existsSync(path))
   if (process.platform !== 'win32') {
     assert.ok(statSync(path).mode & 0o100, 'binary must be executable')

@@ -12,6 +12,9 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const { apply, donsetchConfigPath, donsetchKeysPath } = await import('../dist/index.js')
+const { specViolation } = await import('../dist/schemas.js')
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FAKE = join(HERE, 'fake-mcp-server.mjs')
 
@@ -25,14 +28,15 @@ before(() => {
   cancelLog = join(artifact, 'cancelled.log')
   bootLog = join(artifact, 'boot.log')
   homeDir = join(artifact, 'home')
-  mkdirSync(join(homeDir, '.config', 'donsetch'), { recursive: true })
-  writeFileSync(join(homeDir, '.config', 'donsetch', 'config.json'), '{"hello":1}\n')
   process.env.FAKE_CANCEL_LOG = cancelLog
   process.env.FAKE_ALL_LOG = join(artifact, 'all.log')
   process.env.FAKE_RAW_LOG = join(artifact, 'raw.log')
   process.env.FAKE_BOOT_LOG = bootLog
   process.env.DONSETCH_BIN = process.platform === 'win32' ? join(HERE, 'fake-mcp-server.cmd') : FAKE
   process.env.DONSETCH_DSH_HOME = homeDir
+  mkdirSync(dirname(donsetchConfigPath()), { recursive: true })
+  writeFileSync(donsetchConfigPath(), '{"hello":1}\n')
+  mkdirSync(dirname(donsetchKeysPath()), { recursive: true })
   process.env.DONSETCH_DSH_AUTOUPDATE = 'off'
   chmodSync(FAKE, 0o755)
 })
@@ -45,9 +49,6 @@ after(() => {
   delete process.env.DONSETCH_DSH_AUTOUPDATE
   rmSync(artifact, { recursive: true, force: true })
 })
-
-const { apply, donsetchConfigPath } = await import('../dist/index.js')
-const { specViolation } = await import('../dist/schemas.js')
 
 function assertRegistryClean(def, label) {
   const violations = []
