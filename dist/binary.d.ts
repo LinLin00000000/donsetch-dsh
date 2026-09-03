@@ -8,6 +8,7 @@ import { type Semver } from './version.js';
 interface PlatformInfo {
     key: string;
     asset: string;
+    supported: boolean;
 }
 export declare const PLATFORM: PlatformInfo;
 export declare function cacheDir(): string;

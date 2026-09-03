@@ -23,39 +23,29 @@ function apiBase() {
 }
 const MAX_DOWNLOAD_BYTES = 300 * 1024 * 1024;
 const BINARY_NAME = process.platform === 'win32' ? 'donsetch.exe' : 'donsetch';
-function isLinuxMusl() {
-    if (process.platform !== 'linux')
-        return false;
-    try {
-        const result = spawnSync('ldd', ['--version'], { encoding: 'utf8', timeout: 5000 });
-        return (result.stdout ?? '').toLowerCase().includes('musl');
-    }
-    catch {
-        return false;
-    }
-}
+/**
+ * Exactly the targets the donsetch release pipeline ships. Anything
+ * else is unsupported and fails with the actionable list in the
+ * download error, never with a guessed asset name (musl is not built
+ * by the release workflow; do not claim it).
+ */
 function platformInfo() {
-    const key = process.platform === 'linux'
-        ? isLinuxMusl()
-            ? process.arch === 'arm64'
-                ? 'linux-musl-arm64'
-                : 'linux-musl-x64'
-            : process.arch === 'arm64'
-                ? 'linux-arm64'
-                : 'linux-x64'
-        : process.platform === 'darwin'
-            ? process.arch === 'arm64'
-                ? 'darwin-arm64'
-                : 'darwin-x64'
-            : process.platform === 'win32'
-                ? 'win32-x64'
-                : `${process.platform}-${process.arch}`;
-    const asset = key === 'linux-musl-arm64'
-        ? 'donsetch-linux-musl-arm64.tar.gz'
-        : key === 'linux-musl-x64'
-            ? 'donsetch-linux-musl-x64.tar.gz'
-            : `donsetch-${key}.tar.gz`;
-    return { key, asset };
+    if (process.platform === 'linux' && process.arch === 'x64') {
+        return { key: 'linux-x64', asset: 'donsetch-linux-x64.tar.gz', supported: true };
+    }
+    if (process.platform === 'linux' && process.arch === 'arm64') {
+        return { key: 'linux-arm64', asset: 'donsetch-linux-arm64.tar.gz', supported: true };
+    }
+    if (process.platform === 'darwin' && process.arch === 'arm64') {
+        return { key: 'darwin-arm64', asset: 'donsetch-darwin-arm64.tar.gz', supported: true };
+    }
+    if (process.platform === 'darwin' && process.arch === 'x64') {
+        return { key: 'darwin-x64', asset: 'donsetch-darwin-x64.tar.gz', supported: true };
+    }
+    if (process.platform === 'win32' && process.arch === 'x64') {
+        return { key: 'win32-x64', asset: 'donsetch-win32-x64.tar.gz', supported: true };
+    }
+    return { key: `${process.platform}-${process.arch}`, asset: 'unsupported', supported: false };
 }
 export const PLATFORM = platformInfo();
 export function cacheDir() {
@@ -187,6 +177,9 @@ export async function downloadBinary(version, options = {}) {
     const timeout = options.timeoutMs ?? 120_000;
     await acquireLock(root, 120_000);
     try {
+        if (!PLATFORM.supported) {
+            throw new Error(`donsetch does not ship a binary for ${PLATFORM.key}. Supported platforms: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64.`);
+        }
         // Already fully installed? Short-circuit (also covers races).
         const target = binaryAt(version);
         if (existsSync(target))
@@ -198,7 +191,7 @@ export async function downloadBinary(version, options = {}) {
             throw new Error(`could not reach ${releasesBase()} (network down?) while installing donsetch v${version}`);
         if (!tarballResp.ok) {
             await tarballResp.drain();
-            throw new Error(`donsetch does not ship a ${PLATFORM.key} binary for v${version} (release fetch returned HTTP ${tarballResp.status}). Supported platforms: linux-x64, linux-arm64, linux-musl, darwin-x64, darwin-arm64, win32-x64.`);
+            throw new Error(`donsetch does not ship a ${PLATFORM.key} binary for v${version} (release fetch returned HTTP ${tarballResp.status}). Supported platforms: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64.`);
         }
         const sidecarResp = await httpGet(`${base}.sha256`, timeout).catch(() => null);
         if (sidecarResp === null || !sidecarResp.ok) {
