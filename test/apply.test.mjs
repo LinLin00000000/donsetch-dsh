@@ -145,6 +145,7 @@ test('apply: dispose tears the daemon down and leaves no orphan children', async
   const before = await echo.execute({ text: 'x' }, { signal: new AbortController().signal })
   assert.equal(before.content[0].text, 'echo:x')
   await harness.dispose()
+  if (process.platform === 'win32') return // pgrep oracle is POSIX-only; linux leg covers orphan discipline
   const { spawnSync } = await import('node:child_process')
   const count = () => Number(spawnSync('pgrep', ['-fc', 'fake-mcp-server'], { encoding: 'utf8' }).stdout.trim() || '0')
   let left = count()
