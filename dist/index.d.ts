@@ -1,0 +1,50 @@
+/**
+ * @dsh-external/donsetch : first-class DonSeTch web access for
+ * DeepSeek Harness.
+ *
+ * The plugin spawns ONE supervised `donsetch mcp` daemon, registers
+ * every tool the daemon lists (tool parity with the standard
+ * donsetch MCP server is guaranteed by construction), and proxies
+ * calls with the same JSON-RPC discipline as the pi extension: real
+ * cancellation, per-call timeouts, clean restart on daemon loss.
+ *
+ * Native-feel pieces:
+ * - tools are registered in-process on ctx.tools with clean names
+ *   (donsetch_web_fetch, not mcp__donsetch__web_fetch) and flow
+ *   through dsh's full permission/timeout/cancellation pipeline;
+ * - each tool carries call/result cards for the Web workbench;
+ * - the donsetch config file (the one `donsetch keys add` writes) is
+ *   watched, so CLI changes from any terminal reach the live daemon;
+ * - a donsetch_status tool reports version, daemon state, and the
+ *   doctor output so the agent can self-diagnose;
+ * - the binary auto-updates from GitHub Releases on the configured
+ *   channel, SHA256-verified, swapped only between in-flight calls.
+ *
+ * Zero runtime imports from the host train: the plugin talks to the
+ * harness exclusively through the ctx handed to apply().
+ */
+import type { Context } from '@deepseek-ai/cordis';
+export declare const name = "donsetch";
+export declare const inject: readonly ["tools"];
+export type UpdateChannel = 'stable' | 'latest';
+export interface DonsetchConfig {
+    /** Model-facing tool prefix; default donsetch. */
+    toolPrefix?: string;
+    /** Release channel for auto-updates. */
+    channel?: UpdateChannel;
+    /** Auto-download+swap newer donsetch releases. Default true. */
+    autoUpdate?: boolean;
+    /** Minimum gap between update checks, hours. Default 24. */
+    updateIntervalHours?: number;
+    /** Per-call MCP timeout, ms. Default 180000. */
+    callTimeoutMs?: number;
+    /** Initialize + tools/list timeout, ms. Default 20000. */
+    bootTimeoutMs?: number;
+    /** Fall back to a donsetch already on PATH when download fails. */
+    fallbackToPath?: boolean;
+    /** donsetch release pinned for fresh installs (floor, not ceiling). */
+    pinnedVersion?: string;
+}
+/** Resolve the config file the real donsetch CLI reads, per OS. */
+export declare function donsetchConfigPath(): string;
+export declare function apply(ctx: Context, rawConfig?: DonsetchConfig): void;

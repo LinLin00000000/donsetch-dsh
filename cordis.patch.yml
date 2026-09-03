@@ -1,0 +1,9 @@
+# DonSeTch bundle patch: mounts this package as a plugin row named
+# "donsetch" in any profile that lists this bundle. Defaults live in
+# src/index.ts; override individual keys here or in the profile's own
+# cordis.patch.yml (later layers win).
+- insert:
+    - id: donsetch
+      name: '@dsh-external/donsetch'
+      config:
+        toolPrefix: donsetch

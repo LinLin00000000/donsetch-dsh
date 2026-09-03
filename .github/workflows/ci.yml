@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: build + unit + live parity
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: Live parity against the pinned donsetch release
+        run: npm run live
+        env:
+          # The live test downloads the pinned release from GitHub
+          # Releases and drives the real daemon over MCP.
+          DONSETCH_DSH_AUTOUPDATE: off
+
+  # The Ubuntu boot smoke waits on upstream discussion #1686 (the npm
+  # dsh CLI lacks the linux-x64 pty prebuild and cannot boot). Until
+  # that lands, Windows hosts the boot smoke: install the packed
+  # tarball into a fresh DSH profile and verify the composition row.
+  dsh-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+      - run: npm pack
+        shell: bash
+      - name: Install into a fresh DSH profile and verify the row
+        shell: pwsh
+        run: |
+          $tgz = Get-ChildItem *.tgz | Select-Object -First 1
+          npx -y @deepseek-ai/dsh@latest plugin --profile ci add (Resolve-Path $tgz.Name)
+          npx -y @deepseek-ai/dsh@latest --profile ci --dump-config | Select-String -Pattern '@dsh-external/donsetch|donsetch'
+          if ($LASTEXITCODE -ne 0) { exit 1 }

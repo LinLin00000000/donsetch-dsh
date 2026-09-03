@@ -1,0 +1,44 @@
+{
+  "name": "@dsh-external/donsetch",
+  "version": "1.0.0",
+  "description": "First-class DonSeTch web access for DeepSeek Harness: fetch, search and crawl with browser-grade stealth, keyless engines, BYOK providers and an auto-updating native binary.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "lint": "node scripts/no-em-dash.mjs",
+    "pack-check": "npm run build && node scripts/pack-check.mjs",
+    "live": "npm run build && node scripts/live-test.mjs"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "donsetch",
+    "deepseek-harness",
+    "web",
+    "fetch",
+    "search",
+    "crawl",
+    "mcp",
+    "agent"
+  ],
+  "license": "AGPL-3.0-only",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

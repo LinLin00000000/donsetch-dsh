@@ -1,0 +1,10 @@
+node_modules/
+*.tgz
+.cache/
+
+# dist/ is COMMITTED on purpose: prebuilt artifacts mean git installs
+# never run a prepare script and dsh users skip the pnpm 10 build
+# permission prompt entirely (see the dsh publishing docs).
+# Do not add dist/ back to this file.
+project.md
+status.md
