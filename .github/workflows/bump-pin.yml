@@ -1,0 +1,60 @@
+name: Bump DonSeTch pin
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to pin (for example, v4.1.2)
+        required: false
+        type: string
+  repository_dispatch:
+    types: [donsetch-release]
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Update DonSeTch pin
+        env:
+          TAG: ${{ inputs.tag || github.event.client_payload.tag }}
+        run: node scripts/bump-pin.mjs "$TAG"
+
+      - name: Verify and build
+        env:
+          DONSETCH_DSH_AUTOUPDATE: "off"
+        run: |
+          if git diff --quiet; then
+            echo "Pin already current"
+            exit 0
+          fi
+          npm run build
+          npm run typecheck
+          npm run lint
+          npm test
+
+      - name: Commit and push
+        run: |
+          if git diff --quiet; then
+            echo "Pin already current"
+            exit 0
+          fi
+          version="$(sed -n "s/^export const PINNED_DONSETCH_VERSION = '\\([^']*\\)'.*/\\1/p" src/version.ts)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src dist README.md
+          git commit -m "chore: pin donsetch ${version}"
+          git push origin HEAD:main

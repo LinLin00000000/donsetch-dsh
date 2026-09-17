@@ -85,6 +85,8 @@ Patch-layer example (`$DSH_HOME/cordis.patch.yml`, later layers win):
 
 Two-layer update story. The plugin glue is a bundle: re-running `dsh plugin add` against a newer pin (or letting the repository panel track the branch) keeps it current. The donsetch binary updates itself: on a throttled schedule it checks GitHub Releases on your channel, and when a newer release appears it downloads, SHA256-verifies against the release sidecar, and swaps the daemon between in-flight calls. A failed verify aborts the install and keeps the current binary; nothing partial ever replaces a working daemon.
 
+The baseline DonSeTch pin auto-tracks published releases every 6 hours.
+
 ## Reliability notes
 
 - The daemon runs supervised (`donsetch mcp --supervised`), so crashes restart transparently and the next tool call revives cleanly.
