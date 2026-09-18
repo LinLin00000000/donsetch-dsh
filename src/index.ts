@@ -72,6 +72,41 @@ interface ResolvedConfig {
   pinnedVersion: string
 }
 
+/** Time to add on top of a call's own budget before the client gives up. */
+const CALL_DEADLINE_SLACK_MS = 20_000
+/** The largest legal budget (600s) plus slack. */
+const MAX_CALL_TIMEOUT_MS = 620_000
+
+function positiveNumber(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/**
+ * Per-call timeout for one tools/call. The configured callTimeoutMs is a
+ * single bound for every tool, but the binary's own budgets are larger
+ * than it: web_crawl accepts deadline_s up to 600 and web_fetch
+ * deadline_ms up to 600000, so a legal call was being killed by the
+ * client while the server was still inside its documented deadline (the
+ * crawl default of 120s already sat inside the 180s default, racing
+ * it). Derive the timeout from the call's own budget plus slack, capped
+ * at the largest budget the schemas allow so a hostile argument cannot
+ * hold a slot forever.
+ */
+export function callTimeoutFor(name: string, args: unknown, baseMs: number): number {
+  const a = (args ?? {}) as Record<string, unknown>
+  let budgetMs: number | null = null
+  if (name === 'web_crawl') {
+    const secs = positiveNumber(a.deadline_s)
+    // No budget (or an unusable one) means the binary's own default.
+    budgetMs = secs !== null ? secs * 1000 : 120_000
+  } else if (name === 'web_fetch') {
+    budgetMs = positiveNumber(a.deadline_ms)
+  }
+  if (budgetMs === null) return baseMs
+  return Math.min(budgetMs + CALL_DEADLINE_SLACK_MS, MAX_CALL_TIMEOUT_MS)
+}
+
 function resolveConfig(raw: DonsetchConfig): ResolvedConfig {
   const prefix = raw.toolPrefix ?? process.env.DONSETCH_DSH_PREFIX ?? 'donsetch'
   if (!isValidPrefix(prefix)) {
@@ -313,7 +348,12 @@ export function apply(ctx: Context, rawConfig: DonsetchConfig = {}): { dispose()
         }
         activeCalls++
         try {
-          const result = await booted!.client.callTool(rawName, args, exec?.signal)
+          const result = await booted!.client.callTool(
+            rawName,
+            args,
+            exec?.signal,
+            callTimeoutFor(rawName, args, config.callTimeoutMs)
+          )
           if (result?.isError === true) {
             const text = joinBlocks(result)
             throw new Error(text || `donsetch ${rawName} failed`)

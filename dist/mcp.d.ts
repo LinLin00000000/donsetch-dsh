@@ -64,7 +64,7 @@ export declare class McpClient {
      * Call a registered tool. When the signal aborts we tell the real
      * server to stop the in-flight work, not just abandon it.
      */
-    callTool(name: string, args: unknown, signal?: AbortSignal): Promise<McpResult>;
+    callTool(name: string, args: unknown, signal?: AbortSignal, timeoutMs?: number): Promise<McpResult>;
     /** Stderr ring buffer: last 8 KiB of diagnostics, for status output. */
     stderrTailText(): string;
     /** Graceful shutdown: end stdin, TERM, then KILL after grace. */

@@ -282,8 +282,12 @@ export class McpClient {
      * Call a registered tool. When the signal aborts we tell the real
      * server to stop the in-flight work, not just abandon it.
      */
-    callTool(name, args, signal) {
-        return this.makeRequest('tools/call', { name, arguments: args ?? {} }, this.opts.callTimeoutMs, signal);
+    callTool(name, args, signal, timeoutMs) {
+        return this.makeRequest('tools/call', { name, arguments: args ?? {} }, 
+        // A caller that knows the call's own budget passes it: the
+        // configured value is one bound for every tool, and a crawl's
+        // legal deadline is larger than it.
+        timeoutMs ?? this.opts.callTimeoutMs, signal);
     }
     /** Stderr ring buffer: last 8 KiB of diagnostics, for status output. */
     stderrTailText() {

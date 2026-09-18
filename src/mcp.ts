@@ -324,8 +324,16 @@ export class McpClient {
    * Call a registered tool. When the signal aborts we tell the real
    * server to stop the in-flight work, not just abandon it.
    */
-  callTool(name: string, args: unknown, signal?: AbortSignal): Promise<McpResult> {
-    return this.makeRequest('tools/call', { name, arguments: args ?? {} }, this.opts.callTimeoutMs, signal) as Promise<McpResult>
+  callTool(name: string, args: unknown, signal?: AbortSignal, timeoutMs?: number): Promise<McpResult> {
+    return this.makeRequest(
+      'tools/call',
+      { name, arguments: args ?? {} },
+      // A caller that knows the call's own budget passes it: the
+      // configured value is one bound for every tool, and a crawl's
+      // legal deadline is larger than it.
+      timeoutMs ?? this.opts.callTimeoutMs,
+      signal
+    ) as Promise<McpResult>
   }
 
   /** Stderr ring buffer: last 8 KiB of diagnostics, for status output. */
