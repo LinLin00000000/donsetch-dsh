@@ -28,8 +28,9 @@ if (!BIN || !existsSync(BIN)) {
       return
     }
     const { Context, Service } = cordis
-    const { ToolRuntime, validateArgs } = dshTools
+    const { ToolRuntime, assertSupportedJsonSchema, validateJsonSchemaValue } = dshTools
     const { apply } = await import('../dist/index.js')
+    const { assertWireSchema } = await import('./wire-schema.mjs')
 
     class StubSystemPrompt extends Service {
       constructor(ctx) {
@@ -94,9 +95,28 @@ if (!BIN || !existsSync(BIN)) {
         donsetch_web_crawl: { url: 'https://example.com', max_pages: 2 },
         donsetch_status: {},
       }
+
+      // The contract that actually breaks in production: the registry stores
+      // `parameters` untouched and schemaOf() copies it onto the model
+      // request, so it must be a JSON Schema document inside the supported
+      // subset. A bare property map is accepted here and rejected upstream
+      // with HTTP 400 / DeepSeek 11129, killing the whole request.
+      const projected = new Map(ctx.tools.schemas().map((schema) => [schema.name, schema]))
       for (const { name, def } of got) {
-        const violations = validateArgs(def.parameters, samples[name] ?? {})
-        assert.deepEqual(violations, [], `${name} args rejected: ${violations.map((v) => v.message ?? v).join('; ')}`)
+        assertWireSchema(def.parameters, name)
+        assertSupportedJsonSchema(def.parameters)
+        const onTheWire = projected.get(name)
+        assert.ok(onTheWire, `${name} must appear in the model-facing schema projection`)
+        assertWireSchema(onTheWire.parameters, `${name} (model-facing)`)
+        // The model-facing copy must be a detached snapshot, not the same object.
+        assert.notEqual(onTheWire.parameters, def.parameters, `${name} parameters must be detached for the model`)
+      }
+
+      // Argument validation against the registered parameters, using the same
+      // raw-JSON-Schema validator the harness applies to schema documents.
+      for (const { name, def } of got) {
+        const violations = validateJsonSchemaValue(def.parameters, samples[name] ?? {}, 'args')
+        assert.deepEqual(violations, [], `${name} args rejected: ${violations.join('; ')}`)
       }
 
       const result = await ctx.tools.execute({

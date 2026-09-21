@@ -4,15 +4,20 @@
  * keyword matrix of hostile inputs. Everything must project to the
  * dsh implicit parameter schema and pass the mirror, and the
  * conversions must be lossless where the dialect allows.
+ *
+ * The second half covers the wire projection: register() does not
+ * compile parameters, so what the plugin hands it must already be a
+ * JSON Schema document or every provider rejects the whole request.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assertWireSchema } from './wire-schema.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const { toDshSpec, specViolation } = await import('../dist/schemas.js')
+const { toDshSpec, specToJsonSchema, specViolation } = await import('../dist/schemas.js')
 
 function assertSpec(spec) {
   const violation = specViolation(spec)
@@ -160,4 +165,112 @@ test('spec: oneOf branches must not carry required flags', () => {
   for (const branch of spec.target.oneOf) {
     assert.ok(!Object.hasOwn(branch, 'required'), 'required only exists on property-map entries')
   }
+})
+
+// ---------------------------------------------------------------------------
+// Wire projection: what register() actually receives.
+// ---------------------------------------------------------------------------
+
+test('wire: every real daemon tool projects into a JSON Schema document', () => {
+  for (const tool of daemonTools()) {
+    const wire = specToJsonSchema(toDshSpec(tool.inputSchema))
+    assertWireSchema(wire, tool.name)
+  }
+})
+
+test('wire: register() would forward a bare property map, so the root must be an object schema', () => {
+  // The regression this whole transform exists for: the author form is a
+  // property map, and register() copies it to the model verbatim, so a
+  // provider sees `parameters: { url: {...} }` and rejects the request.
+  const authorForm = toDshSpec({ type: 'object', properties: { url: { type: 'string' } }, required: ['url'] })
+  assert.ok(!Object.hasOwn(authorForm, 'type'), 'precondition: author form has no root type')
+  const wire = specToJsonSchema(authorForm)
+  assert.equal(wire.type, 'object')
+  assert.ok(Object.hasOwn(wire.properties, 'url'))
+  assert.deepEqual(wire.required, ['url'])
+  assertWireSchema(wire, 'url tool')
+})
+
+test('wire: per-property required booleans become the parent required array at every depth', () => {
+  const wire = specToJsonSchema(
+    toDshSpec({
+      type: 'object',
+      properties: {
+        opts: {
+          type: 'object',
+          properties: { mode: { type: 'string' }, depth: { type: 'integer' } },
+          required: ['mode'],
+          additionalProperties: false,
+        },
+        top: { type: 'string' },
+      },
+      required: ['opts'],
+    }),
+  )
+  assert.deepEqual(wire.required, ['opts'], 'root required array from the property map')
+  assert.equal(wire.properties.opts.type, 'object')
+  assert.equal(wire.properties.opts.additionalProperties, false)
+  assert.deepEqual(wire.properties.opts.required, ['mode'], 'nested required becomes an array too')
+  assert.equal(typeof wire.properties.opts.required, 'object', 'required must be an array, never a boolean')
+  assert.ok(!Object.hasOwn(wire.properties.opts.properties.mode, 'required'))
+  assertWireSchema(wire, 'nested tool')
+})
+
+test('wire: a required property with oneOf keeps required on the parent, never beside oneOf', () => {
+  const wire = specToJsonSchema(
+    toDshSpec({
+      type: 'object',
+      properties: { target: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] } },
+      required: ['target'],
+    }),
+  )
+  assert.deepEqual(wire.required, ['target'])
+  assert.equal(wire.properties.target.oneOf.length, 2)
+  assert.ok(
+    !Object.hasOwn(wire.properties.target, 'required'),
+    'required is a forbidden sibling of oneOf in the raw subset',
+  )
+  assertWireSchema(wire, 'oneOf tool')
+})
+
+test('wire: object nodes always declare additionalProperties explicitly', () => {
+  const wire = specToJsonSchema(toDshSpec({ type: 'object', properties: { opts: { type: 'object', properties: {} }, tags: { type: 'array', items: { type: 'string' } } } }))
+  assert.equal(typeof wire.properties.opts.additionalProperties, 'boolean')
+  assertWireSchema(wire, 'open object tool')
+})
+
+test('wire: the author-only json node becomes an unconstrained (annotation-only) schema', () => {
+  const wire = specToJsonSchema(toDshSpec({ type: 'object', properties: { blob: { description: 'anything goes' } } }))
+  assert.deepEqual(wire.properties.blob, { description: 'anything goes' }, 'json means "any value": no type keyword')
+  assertWireSchema(wire, 'json escape hatch')
+})
+
+test('wire: no boolean required survives anywhere in the serialized document', () => {
+  for (const tool of daemonTools()) {
+    const serialized = JSON.stringify(specToJsonSchema(toDshSpec(tool.inputSchema)))
+    assert.ok(!/"required":(true|false)/.test(serialized), `${tool.name} leaks a boolean required marker`)
+  }
+})
+
+test('wire: an unrepresentable property degrades alone instead of emitting an illegal schema', () => {
+  // Hostile: a property whose author form cannot be mirrored must not
+  // poison the whole document. It becomes an unconstrained node.
+  const wire = specToJsonSchema({ good: { type: 'string' }, weird: { type: 'nonsense' } })
+  assert.equal(wire.properties.good.type, 'string')
+  assert.ok(!Object.hasOwn(wire.properties.weird, 'type'), 'illegal node must not carry a bad type')
+  assertWireSchema(wire, 'degraded tool')
+})
+
+test('wire: an empty parameter map still projects to a valid object root', () => {
+  // The status tool registers with no parameters; `{}` is not a schema.
+  const wire = specToJsonSchema({})
+  assert.deepEqual(wire, { type: 'object', properties: {} })
+  assertWireSchema(wire, 'status tool')
+})
+
+test('wire: scalar enum/const survive the projection', () => {
+  const wire = specToJsonSchema(toDshSpec({ type: 'object', properties: { kind: { type: 'string', enum: ['a', 'b'] }, lock: { type: 'string', const: 'x' } } }))
+  assert.deepEqual(wire.properties.kind.enum, ['a', 'b'])
+  assert.equal(wire.properties.lock.const, 'x')
+  assertWireSchema(wire, 'enum tool')
 })

@@ -1,20 +1,35 @@
 /**
- * Tool-name helpers and the dsh parameter-schema transform.
+ * Tool-name helpers and the dsh parameter-schema transforms.
  *
- * Cotrast to JSON Schema documents: @deepseek-ai/dsh-tools consumes
- * `ToolDefinition.parameters` in its IMPLICIT PARAMETER SCHEMA form,
- * a property map of value schemas:
+ * Two distinct layers are involved, and confusing them ships a broken
+ * tool to the model:
  *
- *   { url: { type: 'string', required: true, description: '...' } }
+ * 1. AUTHOR form (implicit parameter schema), a property map of value
+ *    schemas with per-property `required` flags:
  *
- * no `type: 'object'`/`properties` wrapper, and `required` is a
- * per-property flag, not an array. The runtime compiles this into the
- * JSON Schema handed to the model (parameterSchemaSpecToJsonSchema)
- * and validates every call's arguments against it (validateArgs).
- * Registering a raw MCP `inputSchema` document in the schema-document
- * form poisons the map: the word `type` becomes a parameter name and
- * every call dies in argument validation. That is the failure mode
- * this transform removes.
+ *      { url: { type: 'string', required: true, description: '...' } }
+ *
+ *    This is what `defineTool({ parameters })` accepts; the harness
+ *    compiles it with parameterSchemaSpecToJsonSchema() and validates
+ *    calls with validateArgs(). Nothing else consumes it.
+ *
+ * 2. WIRE form (JSON Schema document), what ToolSchema.parameters must
+ *    already be when a definition goes to `ctx.tools.register()`:
+ *
+ *      { type: 'object', properties: { ... }, required: ['url'] }
+ *
+ *    register() does NOT compile: it stores the definition and
+ *    ToolRuntime.schemaOf() copies `parameters` straight onto the
+ *    model request. The first-party MCP bridge likewise registers its
+ *    raw JSON Schema. Receiving a bare property map here is silently
+ *    accepted by the registry and then rejected by every
+ *    OpenAI-compatible provider with HTTP 400 / DeepSeek 11129
+ *    ("invalid function call parameters"), which takes the WHOLE
+ *    request down, not just the offending tool.
+ *
+ * So: toDshSpec() sanitizes a hostile MCP inputSchema into the author
+ * form (dropping keywords the harness subset cannot enforce), and
+ * specToJsonSchema() projects that into the wire form for register().
  *
  * Value-schema dialect compiled by the harness:
  * - type: 'json' | 'object' | 'array' | 'string' | 'number' |
@@ -36,6 +51,17 @@ export declare function isValidPrefix(prefix: unknown): boolean;
  * unusable inputs degrade to open `json` parameters.
  */
 export declare function toDshSpec(rawSchema: unknown): Record<string, unknown>;
+/**
+ * Project the author form (see the module header) into the JSON Schema
+ * document that `ctx.tools.register()` must receive.
+ *
+ * `required` moves from per-property booleans to the parent's array, at
+ * every depth: a boolean left inside a subschema is not valid JSON
+ * Schema and trips the same provider rejection. The author-only `json`
+ * node becomes an annotation-only schema (any value), and object nodes
+ * keep an explicit `additionalProperties`.
+ */
+export declare function specToJsonSchema(spec: Record<string, unknown>): Record<string, unknown>;
 /**
  * Deterministic mirror of the harness's spec-authoring rules. Null on
  * success, a readable violation otherwise. Everything this module

@@ -34,7 +34,7 @@ import { join } from 'node:path'
 
 import { cacheDir, checkForUpdate, downloadBinary, installedVersions, resolveBinary, type ResolvedBinary } from './binary.js'
 import { McpClient, type McpResult } from './mcp.js'
-import { callKind, callTitle, firstLine, isValidPrefix, publicToolName, specViolation, toDshSpec } from './schemas.js'
+import { callKind, callTitle, firstLine, isValidPrefix, publicToolName, specToJsonSchema, toDshSpec } from './schemas.js'
 import { PINNED_DONSETCH_VERSION, PLUGIN_VERSION } from './version.js'
 
 export const name = 'donsetch'
@@ -263,7 +263,10 @@ export function apply(ctx: Context, rawConfig: DonsetchConfig = {}): { dispose()
       name: publicToolName(config.toolPrefix, 'status') ?? `${config.toolPrefix}_status`,
       description:
         'DonSeTch status and self-diagnostics: binary version, daemon state, registered tools, registration failures, provider keys file, config file path, and the output of `donsetch doctor`. Read this when a donsetch_* tool fails or is missing.',
-      parameters: {},
+      // register() does not compile parameters: it copies them onto the
+      // model request verbatim, so this must already be a JSON Schema
+      // document (a bare `{}` is not one either).
+      parameters: { type: 'object', properties: {} },
       output: { schema: {}, render: (_args, value) => renderContent(value) },
       execute: async () => {
         const lines: string[] = []
@@ -322,19 +325,11 @@ export function apply(ctx: Context, rawConfig: DonsetchConfig = {}): { dispose()
       warn(reason)
       return false
     }
-    // The harness consumes parameters in its implicit parameter-schema
-    // form (a property map of value schemas), not as a JSON Schema
-    // document. Convert, then prove the conversion so the register call
-    // and every call-time validateArgs can never trip on schema shape.
-    const parameters = toDshSpec(inputSchema)
-    const violation = specViolation(parameters)
-    if (violation !== null) {
-      const reason = `tool ${pub}: converted parameters still violate the spec contract (${violation}); registered with an open json parameter`
-      Object.keys(parameters).forEach((key) => delete parameters[key])
-      parameters.input = { type: 'json' }
-      registrationFailures.push(reason)
-      warn(reason)
-    }
+    // Sanitize the hostile MCP inputSchema into the author form, then
+    // project that into the JSON Schema document register() must receive.
+    // Handing register() the bare property map is silently accepted here
+    // and rejected by the provider with 11129, killing every request.
+    const parameters = specToJsonSchema(toDshSpec(inputSchema))
     const def: ToolDefinition = {
       name: pub,
       description: description || `${rawName} via DonSeTch`,

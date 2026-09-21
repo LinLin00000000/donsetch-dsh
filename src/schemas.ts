@@ -1,20 +1,35 @@
 /**
- * Tool-name helpers and the dsh parameter-schema transform.
+ * Tool-name helpers and the dsh parameter-schema transforms.
  *
- * Cotrast to JSON Schema documents: @deepseek-ai/dsh-tools consumes
- * `ToolDefinition.parameters` in its IMPLICIT PARAMETER SCHEMA form,
- * a property map of value schemas:
+ * Two distinct layers are involved, and confusing them ships a broken
+ * tool to the model:
  *
- *   { url: { type: 'string', required: true, description: '...' } }
+ * 1. AUTHOR form (implicit parameter schema), a property map of value
+ *    schemas with per-property `required` flags:
  *
- * no `type: 'object'`/`properties` wrapper, and `required` is a
- * per-property flag, not an array. The runtime compiles this into the
- * JSON Schema handed to the model (parameterSchemaSpecToJsonSchema)
- * and validates every call's arguments against it (validateArgs).
- * Registering a raw MCP `inputSchema` document in the schema-document
- * form poisons the map: the word `type` becomes a parameter name and
- * every call dies in argument validation. That is the failure mode
- * this transform removes.
+ *      { url: { type: 'string', required: true, description: '...' } }
+ *
+ *    This is what `defineTool({ parameters })` accepts; the harness
+ *    compiles it with parameterSchemaSpecToJsonSchema() and validates
+ *    calls with validateArgs(). Nothing else consumes it.
+ *
+ * 2. WIRE form (JSON Schema document), what ToolSchema.parameters must
+ *    already be when a definition goes to `ctx.tools.register()`:
+ *
+ *      { type: 'object', properties: { ... }, required: ['url'] }
+ *
+ *    register() does NOT compile: it stores the definition and
+ *    ToolRuntime.schemaOf() copies `parameters` straight onto the
+ *    model request. The first-party MCP bridge likewise registers its
+ *    raw JSON Schema. Receiving a bare property map here is silently
+ *    accepted by the registry and then rejected by every
+ *    OpenAI-compatible provider with HTTP 400 / DeepSeek 11129
+ *    ("invalid function call parameters"), which takes the WHOLE
+ *    request down, not just the offending tool.
+ *
+ * So: toDshSpec() sanitizes a hostile MCP inputSchema into the author
+ * form (dropping keywords the harness subset cannot enforce), and
+ * specToJsonSchema() projects that into the wire form for register().
  *
  * Value-schema dialect compiled by the harness:
  * - type: 'json' | 'object' | 'array' | 'string' | 'number' |
@@ -198,6 +213,76 @@ export function toDshSpec(rawSchema: unknown): Record<string, unknown> {
     return { input: { type: 'json' } }
   }
   return result
+}
+
+/**
+ * Project the author form (see the module header) into the JSON Schema
+ * document that `ctx.tools.register()` must receive.
+ *
+ * `required` moves from per-property booleans to the parent's array, at
+ * every depth: a boolean left inside a subschema is not valid JSON
+ * Schema and trips the same provider rejection. The author-only `json`
+ * node becomes an annotation-only schema (any value), and object nodes
+ * keep an explicit `additionalProperties`.
+ */
+export function specToJsonSchema(spec: Record<string, unknown>): Record<string, unknown> {
+  return propertyMapToJsonSchema(spec, 'parameters')
+}
+
+function propertyMapToJsonSchema(spec: unknown, path: string): Record<string, unknown> {
+  const properties: Record<string, unknown> = {}
+  const required: string[] = []
+  for (const [name, value] of Object.entries(isPlainObject(spec) ? spec : {})) {
+    const violation = valueSchemaViolation(value, `${path}.${name}`, true)
+    if (violation !== null) {
+      // Never emit a schema the harness subset forbids: degrade this one
+      // property to an unconstrained value so the tool stays callable.
+      properties[name] = { description: `unrepresentable parameter (${violation})` }
+      continue
+    }
+    const { required: isRequired, ...node } = value as Record<string, unknown>
+    properties[name] = nodeToJsonSchema(node, `${path}.${name}`)
+    if (isRequired === true) required.push(name)
+  }
+  return { type: 'object', properties, ...(required.length > 0 ? { required } : {}) }
+}
+
+/** Convert one author-form value schema node into a JSON Schema node. */
+function nodeToJsonSchema(node: unknown, path: string): Record<string, unknown> {
+  const raw = isPlainObject(node) ? node : {}
+  const out: Record<string, unknown> = {}
+  if (typeof raw.description === 'string') out.description = raw.description
+  if (typeof raw.title === 'string') out.title = raw.title
+
+  if (Array.isArray(raw.oneOf)) {
+    out.oneOf = raw.oneOf.map((branch, index) => nodeToJsonSchema(branch, `${path}.oneOf[${index}]`))
+    return out
+  }
+
+  const type = typeof raw.type === 'string' ? raw.type : 'json'
+  switch (type) {
+    case 'object': {
+      out.type = 'object'
+      out.additionalProperties = raw.additionalProperties === true
+      const nested = propertyMapToJsonSchema(raw.properties, `${path}.properties`)
+      out.properties = nested.properties
+      if (Array.isArray(nested.required)) out.required = nested.required
+      return out
+    }
+    case 'array': {
+      out.type = 'array'
+      out.items = raw.items === undefined ? {} : nodeToJsonSchema(raw.items, `${path}.items`)
+      return out
+    }
+    default: {
+      // `json` is author-only: an unconstrained value is an annotation-only node.
+      if (type === 'json') return out
+      out.type = type
+      if (Array.isArray(raw.enum)) out.enum = raw.enum
+      if (raw.const !== undefined) out.const = raw.const
+      return out
+    }
+  }
 }
 
 /**

@@ -13,7 +13,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const { apply, donsetchConfigPath, donsetchKeysPath } = await import('../dist/index.js')
-const { specViolation } = await import('../dist/schemas.js')
+const { assertWireSchema, wireViolations } = await import('./wire-schema.mjs')
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FAKE = join(HERE, 'fake-mcp-server.mjs')
@@ -50,10 +50,19 @@ after(() => {
   rmSync(artifact, { recursive: true, force: true })
 })
 
+/**
+ * Assert one definition satisfies what the REAL registry requires of it.
+ *
+ * The earlier version of this oracle checked `parameters` against the
+ * author-form rules, which is the wrong contract and is exactly why the
+ * 11129 wire bug stayed green: register() never compiles parameters, so
+ * the author form is precisely what must NOT arrive here.
+ */
 function assertRegistryClean(def, label) {
   const violations = []
-  const paramsViolation = specViolation(def.parameters ?? {})
-  if (paramsViolation !== null) violations.push(`parameters: ${paramsViolation}`)
+  const wire = def.parameters
+  const wireIssue = wireViolations(wire, `${label}.parameters`)[0]
+  if (wireIssue !== undefined) violations.push(`parameters: ${wireIssue}`)
   if (typeof def.name !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(def.name)) {
     violations.push(`name ${JSON.stringify(def.name)} is not a legal tool name`)
   }
@@ -177,6 +186,46 @@ test('apply: dispose tears the daemon down and leaves no orphan children', async
     left = count()
   }
   assert.equal(left, 0, 'dispose must kill the daemon child, no orphan may survive')
+})
+
+test('apply: every registered tool carries a JSON Schema document, not the author form', async () => {
+  const harness = makeHarness()
+  apply(harness.ctx, { toolPrefix: 'ds', fallbackToPath: false, callTimeoutMs: 5000, bootTimeoutMs: 5000 })
+  await harness.waitFor((h) => h.defs().some((d) => d.name === 'ds_echo_tool'), 8000)
+  await harness.waitFor((h) => h.defs().some((d) => d.name === 'ds_status'), 8000)
+  const defs = harness.defs()
+  assert.ok(defs.length > 0)
+  for (const def of defs) {
+    assertWireSchema(def.parameters, def.name)
+  }
+  // The daemon-backed tools must keep their real parameters (not degrade).
+  const echo = defs.find((d) => d.name === 'ds_echo_tool')
+  assert.ok(Object.keys(echo.parameters.properties).length > 0, 'echo tool must expose its parameters')
+  // The status tool has no parameters: still a legal empty object schema.
+  const status = defs.find((d) => d.name === 'ds_status')
+  assert.deepEqual(status.parameters, { type: 'object', properties: {} })
+  await harness.dispose()
+})
+
+test('wire oracle: the author form is rejected, the projected form is accepted', () => {
+  // Guard the guard: this is the exact confusion that shipped 11129.
+  const authorForm = { url: { type: 'string', required: true } }
+  assert.notEqual(wireViolations(authorForm)[0], undefined, 'a bare property map must be flagged')
+  assert.deepEqual(wireViolations({ type: 'object', properties: { url: { type: 'string' } }, required: ['url'] }), [])
+  assert.notEqual(
+    wireViolations({ type: 'object', properties: { a: { type: 'object', properties: { b: { type: 'string', required: true } } } } })[0],
+    undefined,
+    'a nested boolean required must be flagged',
+  )
+  assert.notEqual(
+    wireViolations({ type: 'object', properties: { a: { type: 'string', required: true } } })[0],
+    undefined,
+    'required is only supported on an object node',
+  )
+  // `{}` is legal JSON Schema (it constrains nothing) but is not a legal
+  // parameter ROOT: providers need an object schema to accept any tool call.
+  assert.deepEqual(wireViolations({}), [], 'the subset itself permits an empty schema')
+  assert.throws(() => assertWireSchema({}, 'status tool'), /root must be an object schema/)
 })
 
 function bootCount() {
