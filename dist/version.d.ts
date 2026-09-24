@@ -4,7 +4,7 @@
  * parser used for update decisions. No deps.
  */
 /** Bump together with package.json on plugin releases. */
-export declare const PLUGIN_VERSION = "1.1.0";
+export declare const PLUGIN_VERSION = "1.1.1";
 /**
  * The donsetch release a fresh plugin install downloads. Auto-update
  * then tracks newer releases per the configured channel; this pin is

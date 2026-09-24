@@ -47,8 +47,10 @@ export declare function publicToolName(prefix: string, raw: string): string | nu
 export declare function isValidPrefix(prefix: unknown): boolean;
 /**
  * Project an arbitrary MCP `inputSchema` document into the dsh
- * implicit parameter schema. Always returns a register-safe map;
- * unusable inputs degrade to open `json` parameters.
+ * implicit parameter schema (the AUTHOR form; `specToJsonSchema()`
+ * projects that onto the register() wire form). Always returns a
+ * valid author-form map; unusable inputs degrade to open `json`
+ * parameters.
  */
 export declare function toDshSpec(rawSchema: unknown): Record<string, unknown>;
 /**

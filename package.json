@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/donsetch",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "First-class DonSeTch web access for DeepSeek Harness: fetch, search and crawl with browser-grade stealth, keyless engines, BYOK providers and an auto-updating native binary.",
   "type": "module",
   "main": "./dist/index.js",
